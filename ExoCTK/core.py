@@ -128,9 +128,9 @@ class ModelGrid(object):
     
     """
     def __init__(self, model_directory, bibcode='2013A&A...553A...6H',
-                 names={'Teff':'PHXTEFF', 'logg':'PHXLOGG',
-                       'FeH':'PHXM_H', 'mass':'PHXMASS',
-                       'r_eff':'PHXREFF', 'Lbol':'PHXLUM'}, 
+                 names={'PHXTEFF':'Teff', 'PHXLOGG':'logg',
+                       'PHXM_H':'FeH', 'PHXMASS':'mass',
+                       'PHXREFF':'r_eff', 'PHXLUM':'Lbol'}, 
                  resolution='', wl_units=q.um, **kwargs):
         """
         Initializes the model grid by creating a table with a column
@@ -206,12 +206,10 @@ class ModelGrid(object):
             self.path = os.path.dirname(model_directory)+'/'
             self.refs = ''
             self.wave_rng = (0,40)
-            self.flux_file = self.path+'model_grid_flux.hdf5'
-            self.flux = ''
             self.wavelength = self.data.pop('wave')[0]
             self.r_eff = ''
             self.mu = ''
-
+            
             # Remove columns where the values are all the same
             # and store value as attribute instead
             for col in self.data.columns:
@@ -222,71 +220,28 @@ class ModelGrid(object):
                 except TypeError:
                     setattr(self, col, self.data[col][0])
                     self.data.drop(col, axis=1, inplace=True)
-        
-        #     # Save the refs to a References() object
-        #     if bibcode:
-        #         if isinstance(bibcode, (list,tuple)):
-        #             pass
-        #         elif bibcode and isinstance(bibcode, str):
-        #             bibcode = [bibcode]
-        #         else:
-        #             pass
-        #
-        #         self.refs = bibcode
-        #         # _check_for_ref_object()
-        #
-        #     # Get list of spectral intensity files
-        #     files = glob(model_directory)
-        #     filenames = []
-        #     if not files:
-        #         print('No files match',model_directory,'.')
-        #         return
-        #
-        #     # Parse the FITS headers
-        #     vals, dtypes = [], []
-        #     for f in files:
-        #         if f.endswith('.fits'):
-        #             try:
-        #                 header = fits.getheader(f)
-        #                 keys = np.array(header.cards).T[0]
-        #                 dtypes = [type(i[1]) for i in header.cards]
-        #                 vals.append([header.get(k) for k in keys])
-        #                 filenames.append(f.split('/')[-1])
-        #             except:
-        #                 print(f,'could not be read into the model grid.')
-        #
-        #     # Fix data types, trim extraneous values, and make the table
-        #     dtypes = [str if d==bool else d for d in dtypes]
-        #     vals = [v[:len(dtypes)] for v in vals]
-        #     table = at.Table(np.array(vals), names=keys, dtype=dtypes)
-        #
-        #     # Add the filenames as a column
-        #     table['filename'] = filenames
-        #
-        #     # Rename any columns
-        #     for new,old in names.items():
-        #         try:
-        #             table.rename_column(old, new)
-        #         except:
-        #             print('No column named',old)
-        #
-        #     # Remove columns where the values are all the same
-        #     # and store value as attribute instead
-        #     for n in table.colnames:
-        #         val = table[n][0]
-        #         if list(table[n]).count(val) == len(table[n])\
-        #         and n not in ['Teff','logg','FeH']:
-        #             setattr(self, n, val)
-        #             table.remove_column(n)
-        #
-        #     # Store the table in the data attribute
-        #     self.data = table
-        #
-        #     # Store the parameter ranges
-        #     self.Teff_vals = np.asarray(np.unique(table['Teff']))
-        #     self.logg_vals = np.asarray(np.unique(table['logg']))
-        #     self.FeH_vals = np.asarray(np.unique(table['FeH']))
-        #
+                    
+            # Save the refs to a References() object
+            if bibcode:
+                if isinstance(bibcode, (list,tuple)):
+                    pass
+                elif bibcode and isinstance(bibcode, str):
+                    bibcode = [bibcode]
+                else:
+                    pass
+                    
+                self.refs = bibcode
+                # _check_for_ref_object()
+            
+            # Rename any columns and make it into astropy.table
+            self.data.rename(columns=names, inplace=True)
+            self.data = at.Table.from_pandas(self.data)
+
+            # Store the parameter ranges
+            self.Teff_vals = np.unique(self.data['Teff'])
+            self.logg_vals = np.unique(self.data['logg'])
+            self.FeH_vals  = np.unique(self.data['FeH'])
+       
         #     # Write an inventory file to this directory for future table loads
         #     if model_directory.endswith('/*'):
         #         self.file = file
@@ -294,23 +249,23 @@ class ModelGrid(object):
         #             pickle.dump(self, open(self.file, 'wb'))
         #         except IOError:
         #             print('Could not write model grid to',self.file)
-        #
-        # # Print something
-        # print(len(self.data),'models loaded from',self.path)
-        #
-        # # In case no filter is used
-        # self.n_bins = 1
-        #
-        # # Set the wavelength_units
-        # self.wl_units = q.AA
-        # if wl_units:
-        #     self.set_units(wl_units)
-        # else:
-        #     self.const = 1
-        #
-        # # Save the desired resolution
-        # self.resolution = resolution
-        #
+       
+        # Print something
+        print(len(self.data),'models loaded from',self.path)
+
+        # In case no filter is used
+        self.n_bins = 1
+
+        # Set the wavelength_units
+        self.wl_units = q.AA
+        if wl_units:
+            self.set_units(wl_units)
+        else:
+            self.const = 1
+
+        # Save the desired resolution
+        self.resolution = resolution
+
         # # Customize from the get-go
         # if kwargs:
         #     self.customize(**kwargs)
@@ -374,7 +329,7 @@ class ModelGrid(object):
                                   & (self.data['FeH']==FeH))[0]
                                   
                     # Get the data
-                    filepath = self.path+str(self.data[row]['filename'])
+                    filepath = self.path+str(self.data[row]['file'])
                     spec_dict = read_from_fits(filepath)
                     
                     # Convert from A to desired units
@@ -559,86 +514,86 @@ class ModelGrid(object):
             print('Grid too sparse. Could not interpolate.')
             return
             
-    def load_flux(self, reset=False):
-        """
-        Retrieve the flux arrays for all models 
-        and load into the ModelGrid.array attribute
-        with shape (Teff, logg, FeH, mu, wavelength)
-        """
-        if reset:
-            
-            # Delete the old file and clear the flux attribute
-            if os.path.isfile(self.flux_file):
-                os.remove(self.flux_file)
-            self.flux = ''
-            
-        if isinstance(self.flux,str):
-            
-            print('Loading flux into table...')
-            
-            if os.path.isfile(self.flux_file):
-                
-                # Load the flux from the HDF5 file
-                f = h5py.File(self.flux_file, "r")
-                self.flux = f['flux'][:]
-                f.close()
-                
-            else:
-                
-                # Get array dimensions
-                T, G, M = self.Teff_vals, self.logg_vals, self.FeH_vals
-                shp = [len(T),len(G),len(M)]
-                n, N = 1, np.prod(shp)
-                
-                # Iterate through rows
-                for nt,teff in enumerate(T):
-                    for ng,logg in enumerate(G):
-                        for nm,feh in enumerate(M):
-                            
-                            try:
-                                
-                                # Retrieve flux using the `get()` method
-                                d = self.get(teff, logg, feh, interp=False)
-                                
-                                if d:
-                                    
-                                    # Make sure arrays exist
-                                    if isinstance(self.flux,str):
-                                        self.flux = np.zeros(shp+list(d['flux'].shape))
-                                    if isinstance(self.r_eff,str):
-                                        self.r_eff = np.zeros(shp)
-                                    if isinstance(self.mu,str):
-                                        self.mu = np.zeros(shp+list(d['mu'].shape))
-                                        
-                                    # Add data to respective arrays
-                                    self.flux[nt,ng,nm] = d['flux']
-                                    self.r_eff[nt,ng,nm] = d['r_eff'] or np.nan
-                                    self.mu[nt,ng,nm] = d['mu'].squeeze()
-                                    
-                                    # Get the wavelength array
-                                    if isinstance(self.wavelength,str):
-                                        self.wavelength = d['wave']
-                                        
-                                    # Garbage collection
-                                    del d
-                                    
-                                    # Print update
-                                    n += 1
-                                    print("{:.2f} percent complete.".format(n*100./N), end='\r')
-                                    
-                            except IOError:
-                                # No model computed so reduce total
-                                N -= 1
-                                
-                # Load the flux into an HDF5 file
-                f = h5py.File(self.flux_file, "w")
-                dset = f.create_dataset('flux', data=self.flux)
-                f.close()
-                del dset
-                print("100.00 percent complete!", end='\n')
-                
-        else:
-            print('Data already loaded.')
+    # def load_flux(self, reset=False):
+    #     """
+    #     Retrieve the flux arrays for all models
+    #     and load into the ModelGrid.array attribute
+    #     with shape (Teff, logg, FeH, mu, wavelength)
+    #     """
+    #     if reset:
+    #
+    #         # Delete the old file and clear the flux attribute
+    #         if os.path.isfile(self.flux_file):
+    #             os.remove(self.flux_file)
+    #         self.flux = ''
+    #
+    #     if isinstance(self.flux,str):
+    #
+    #         print('Loading flux into table...')
+    #
+    #         if os.path.isfile(self.flux_file):
+    #
+    #             # Load the flux from the HDF5 file
+    #             f = h5py.File(self.flux_file, "r")
+    #             self.flux = f['flux'][:]
+    #             f.close()
+    #
+    #         else:
+    #
+    #             # Get array dimensions
+    #             T, G, M = self.Teff_vals, self.logg_vals, self.FeH_vals
+    #             shp = [len(T),len(G),len(M)]
+    #             n, N = 1, np.prod(shp)
+    #
+    #             # Iterate through rows
+    #             for nt,teff in enumerate(T):
+    #                 for ng,logg in enumerate(G):
+    #                     for nm,feh in enumerate(M):
+    #
+    #                         try:
+    #
+    #                             # Retrieve flux using the `get()` method
+    #                             d = self.get(teff, logg, feh, interp=False)
+    #
+    #                             if d:
+    #
+    #                                 # Make sure arrays exist
+    #                                 if isinstance(self.flux,str):
+    #                                     self.flux = np.zeros(shp+list(d['flux'].shape))
+    #                                 if isinstance(self.r_eff,str):
+    #                                     self.r_eff = np.zeros(shp)
+    #                                 if isinstance(self.mu,str):
+    #                                     self.mu = np.zeros(shp+list(d['mu'].shape))
+    #
+    #                                 # Add data to respective arrays
+    #                                 self.flux[nt,ng,nm] = d['flux']
+    #                                 self.r_eff[nt,ng,nm] = d['r_eff'] or np.nan
+    #                                 self.mu[nt,ng,nm] = d['mu'].squeeze()
+    #
+    #                                 # Get the wavelength array
+    #                                 if isinstance(self.wavelength,str):
+    #                                     self.wavelength = d['wave']
+    #
+    #                                 # Garbage collection
+    #                                 del d
+    #
+    #                                 # Print update
+    #                                 n += 1
+    #                                 print("{:.2f} percent complete.".format(n*100./N), end='\r')
+    #
+    #                         except IOError:
+    #                             # No model computed so reduce total
+    #                             N -= 1
+    #
+    #             # Load the flux into an HDF5 file
+    #             f = h5py.File(self.flux_file, "w")
+    #             dset = f.create_dataset('flux', data=self.flux)
+    #             f.close()
+    #             del dset
+    #             print("100.00 percent complete!", end='\n')
+    #
+    #     else:
+    #         print('Data already loaded.')
             
     def customize(self, Teff_rng=(2300,8000), logg_rng=(0,6), 
                   FeH_rng=(-2,1), wave_rng=(0,40), n_bins=''):
