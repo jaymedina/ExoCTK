@@ -12,6 +12,7 @@ from scipy.interpolate import splmake, spleval
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import zoom
 from functools import partial
+from multiprocessing.dummy import Pool as ThreadPool
 import multiprocessing
 import bibtexparser as bt
 import astropy.table as at
@@ -19,6 +20,7 @@ import astropy.io.votable as vo
 import astropy.io.ascii as ii
 import astropy.units as q
 import matplotlib.pyplot as plt
+import pandas as pd
 import pkg_resources
 import pickle
 import warnings
@@ -49,7 +51,7 @@ def interp_flux(mu, flux, params, values):
     
     Returns
     -------
-    tu
+    tuple
         The array of new flux values
     """
     # Iterate over each wavelength (-1 index of flux array)
@@ -64,6 +66,39 @@ def interp_flux(mu, flux, params, values):
         generators.append(interp_f)
     
     return flx, generators
+
+def read_from_fits(filepath):
+    """
+    Retrieve the data for this model from file
+    """
+    try:
+        
+        # Get the data
+        flux, header = fits.getdata(filepath, 0, ignore_missing_end=True, header=True)
+        mu           = fits.getdata(filepath, 1, ignore_missing_end=True)
+        abund        = fits.getdata(filepath, 2, ignore_missing_end=True)
+        
+        # Construct full wavelength scale and convert to microns
+        if header['CRVAL1']=='-':
+            
+            # Try to get data from WAVELENGTH extension...
+            wave = np.array(fits.getdata(filepath, ext=-1)).squeeze()
+            
+        else:
+            
+            # ...or try to generate it
+            l = len(flux[0])
+            wave = np.array(header['CRVAL1']+header['CDELT1']*np.arange(l)).squeeze()
+            
+        # Make a dictionary of parameters
+        data_dict = {'wave':wave, 'flux':flux, 'mu':mu, 'abund':list(abund), 'file':filepath}
+        data_dict.update(dict([H[:2] for H in header.cards]))
+        
+        return data_dict
+        
+    except:
+        
+        return {}
 
 class ModelGrid(object):
     """
@@ -123,35 +158,49 @@ class ModelGrid(object):
             
         # Check for a precomputed pickle of this ModelGrid
         model_grid = ''
-        if model_directory.endswith('/*'):
-            # Location of model_grid pickle
-            file = model_directory.replace('*','model_grid.p')
-            
-            try:
-                model_grid = pickle.load(open(file, 'rb'))
-            except:
-                pass
+        # if model_directory.endswith('/*'):
+        #     # Location of model_grid pickle
+        #     file = model_directory.replace('*','model_grid.p')
+        #
+        #     try:
+        #         model_grid = pickle.load(open(file, 'rb'))
+        #     except:
+        #         pass
         
         # Instantiate the precomputed model grid
         if model_grid:
-            
+
             for k,v in vars(model_grid).items():
                 setattr(self, k, v)
-            
+
             self.flux_file = self.path+'model_grid_flux.hdf5'
             self.flux = ''
             self.wavelength = ''
             self.r_eff = ''
             self.mu = ''
-            
+
             del model_grid
-            
+
         # Or compute it from scratch
         else:
             
-            # Print update...
-            if model_directory.endswith('/*'):
-                print("Indexing models. Loading this model grid will be MUCH faster next time!")
+            # Get list of spectral intensity files
+            files = glob(model_directory)
+            if not files:
+                print('No files match',model_directory,'.')
+                return
+            
+            # Get the data dictionaries for all files
+            file_data = []
+            start = time.time()
+            pool = ThreadPool(8)
+            file_data = pool.map(read_from_fits, files)
+            pool.close()
+            pool.join()
+            print('Run time in seconds: ', time.time()-start)
+            
+            # Pop empty dictionaries
+            self.data = pd.DataFrame(list(filter(None, file_data)))
             
             # Create some attributes
             self.path = os.path.dirname(model_directory)+'/'
@@ -159,101 +208,112 @@ class ModelGrid(object):
             self.wave_rng = (0,40)
             self.flux_file = self.path+'model_grid_flux.hdf5'
             self.flux = ''
-            self.wavelength = ''
+            self.wavelength = self.data.pop('wave')[0]
             self.r_eff = ''
             self.mu = ''
-            
-            # Save the refs to a References() object
-            if bibcode:
-                if isinstance(bibcode, (list,tuple)):
-                    pass
-                elif bibcode and isinstance(bibcode, str):
-                    bibcode = [bibcode]
-                else:
-                    pass
-                    
-                self.refs = bibcode
-                # _check_for_ref_object()
-            
-            # Get list of spectral intensity files
-            files = glob(model_directory)
-            filenames = []
-            if not files:
-                print('No files match',model_directory,'.')
-                return
-                
-            # Parse the FITS headers
-            vals, dtypes = [], []
-            for f in files:
-                if f.endswith('.fits'):
-                    try:
-                        header = fits.getheader(f)
-                        keys = np.array(header.cards).T[0]
-                        dtypes = [type(i[1]) for i in header.cards]
-                        vals.append([header.get(k) for k in keys])
-                        filenames.append(f.split('/')[-1])
-                    except:
-                        print(f,'could not be read into the model grid.')
-                        
-            # Fix data types, trim extraneous values, and make the table
-            dtypes = [str if d==bool else d for d in dtypes]
-            vals = [v[:len(dtypes)] for v in vals]
-            table = at.Table(np.array(vals), names=keys, dtype=dtypes)
-            
-            # Add the filenames as a column
-            table['filename'] = filenames
-            
-            # Rename any columns
-            for new,old in names.items():
-                try:
-                    table.rename_column(old, new)
-                except:
-                    print('No column named',old)
-                    
+
             # Remove columns where the values are all the same
             # and store value as attribute instead
-            for n in table.colnames:
-                val = table[n][0]
-                if list(table[n]).count(val) == len(table[n])\
-                and n not in ['Teff','logg','FeH']:
-                    setattr(self, n, val)
-                    table.remove_column(n)
-                    
-            # Store the table in the data attribute
-            self.data = table
-            
-            # Store the parameter ranges
-            self.Teff_vals = np.asarray(np.unique(table['Teff']))
-            self.logg_vals = np.asarray(np.unique(table['logg']))
-            self.FeH_vals = np.asarray(np.unique(table['FeH']))
-            
-            # Write an inventory file to this directory for future table loads
-            if model_directory.endswith('/*'):
-                self.file = file
+            for col in self.data.columns:
                 try:
-                    pickle.dump(self, open(self.file, 'wb'))
-                except IOError:
-                    print('Could not write model grid to',self.file)
-                    
-        # Print something
-        print(len(self.data),'models loaded from',self.path)
+                    if len(list(set(self.data[col])))==1 and col not in ['Teff','logg','FeH']:
+                        setattr(self, col, self.data[col][0])
+                        self.data.drop(col, axis=1, inplace=True)
+                except TypeError:
+                    setattr(self, col, self.data[col][0])
+                    self.data.drop(col, axis=1, inplace=True)
         
-        # In case no filter is used
-        self.n_bins = 1
-        
-        # Set the wavelength_units
-        self.wl_units = q.AA
-        if wl_units:
-            self.set_units(wl_units)
-        else:
-            self.const = 1
-            
-        # Save the desired resolution
-        self.resolution = resolution
-        
-        # Customize from the get-go
-        if kwargs:
-            self.customize(**kwargs)
+        #     # Save the refs to a References() object
+        #     if bibcode:
+        #         if isinstance(bibcode, (list,tuple)):
+        #             pass
+        #         elif bibcode and isinstance(bibcode, str):
+        #             bibcode = [bibcode]
+        #         else:
+        #             pass
+        #
+        #         self.refs = bibcode
+        #         # _check_for_ref_object()
+        #
+        #     # Get list of spectral intensity files
+        #     files = glob(model_directory)
+        #     filenames = []
+        #     if not files:
+        #         print('No files match',model_directory,'.')
+        #         return
+        #
+        #     # Parse the FITS headers
+        #     vals, dtypes = [], []
+        #     for f in files:
+        #         if f.endswith('.fits'):
+        #             try:
+        #                 header = fits.getheader(f)
+        #                 keys = np.array(header.cards).T[0]
+        #                 dtypes = [type(i[1]) for i in header.cards]
+        #                 vals.append([header.get(k) for k in keys])
+        #                 filenames.append(f.split('/')[-1])
+        #             except:
+        #                 print(f,'could not be read into the model grid.')
+        #
+        #     # Fix data types, trim extraneous values, and make the table
+        #     dtypes = [str if d==bool else d for d in dtypes]
+        #     vals = [v[:len(dtypes)] for v in vals]
+        #     table = at.Table(np.array(vals), names=keys, dtype=dtypes)
+        #
+        #     # Add the filenames as a column
+        #     table['filename'] = filenames
+        #
+        #     # Rename any columns
+        #     for new,old in names.items():
+        #         try:
+        #             table.rename_column(old, new)
+        #         except:
+        #             print('No column named',old)
+        #
+        #     # Remove columns where the values are all the same
+        #     # and store value as attribute instead
+        #     for n in table.colnames:
+        #         val = table[n][0]
+        #         if list(table[n]).count(val) == len(table[n])\
+        #         and n not in ['Teff','logg','FeH']:
+        #             setattr(self, n, val)
+        #             table.remove_column(n)
+        #
+        #     # Store the table in the data attribute
+        #     self.data = table
+        #
+        #     # Store the parameter ranges
+        #     self.Teff_vals = np.asarray(np.unique(table['Teff']))
+        #     self.logg_vals = np.asarray(np.unique(table['logg']))
+        #     self.FeH_vals = np.asarray(np.unique(table['FeH']))
+        #
+        #     # Write an inventory file to this directory for future table loads
+        #     if model_directory.endswith('/*'):
+        #         self.file = file
+        #         try:
+        #             pickle.dump(self, open(self.file, 'wb'))
+        #         except IOError:
+        #             print('Could not write model grid to',self.file)
+        #
+        # # Print something
+        # print(len(self.data),'models loaded from',self.path)
+        #
+        # # In case no filter is used
+        # self.n_bins = 1
+        #
+        # # Set the wavelength_units
+        # self.wl_units = q.AA
+        # if wl_units:
+        #     self.set_units(wl_units)
+        # else:
+        #     self.const = 1
+        #
+        # # Save the desired resolution
+        # self.resolution = resolution
+        #
+        # # Customize from the get-go
+        # if kwargs:
+        #     self.customize(**kwargs)
             
     def get(self, Teff, logg, FeH, resolution='', interp=True):
         """
@@ -281,86 +341,145 @@ class ModelGrid(object):
             mu values and the effective radius for the given model
         
         """
-        # See if the model with the desired parameters is witin the grid
-        in_grid = all([(Teff>=min(self.Teff_vals))&
-                       (Teff<=max(self.Teff_vals))&
-                       (logg>=min(self.logg_vals))&
-                       (logg<=max(self.logg_vals))&
-                       (FeH>=min(self.FeH_vals))&
-                       (FeH<=max(self.FeH_vals))])
-                       
-        if in_grid:
+        # Test if any of the input parameters include uncertainties
+        if any([isinstance(p, (list,tuple,np.ndarray)) for p in [Teff, logg, FeH]]):
             
-            # See if the model with the desired parameters is a true grid point
-            on_grid = self.data[[(self.data['Teff']==Teff)&
-                                 (self.data['logg']==logg)&
-                                 (self.data['FeH']==FeH)]]\
-                                 in self.data
-            
-            # Grab the data if the point is on the grid
-            if on_grid:
-                
-                # Get the row index and filepath
-                row, = np.where((self.data['Teff']==Teff)
-                              & (self.data['logg']==logg)
-                              & (self.data['FeH']==FeH))[0]
-                              
-                filepath = self.path+str(self.data[row]['filename'])
-                
-                # Get the flux, mu, and abundance arrays
-                raw_flux = fits.getdata(filepath, 0)
-                mu = fits.getdata(filepath, 1)
-                #abund = fits.getdata(filepath, 2)
-                
-                # Construct full wavelength scale and convert to microns
-                if self.CRVAL1=='-':
-                    # Try to get data from WAVELENGTH extension...
-                    raw_wave = np.array(fits.getdata(filepath, ext=-1)).squeeze()
-                else:
-                    # ...or try to generate it
-                    l = len(raw_flux[0])
-                    raw_wave = np.array(self.CRVAL1+self.CDELT1*np.arange(l)).squeeze()
-                    
-                # Convert from A to desired units
-                raw_wave *= self.const
-                
-                # Trim the wavelength and flux arrays
-                idx, = np.where(np.logical_and(raw_wave>=self.wave_rng[0],
-                                              raw_wave<=self.wave_rng[1]))
-                flux = raw_flux[:,idx]
-                wave = raw_wave[idx]
-                
-                # Bin the spectrum if necessary
-                if resolution or self.resolution:
-                    
-                    # Calculate zoom
-                    z = _calc_zoom(resolution or self.resolution, wave)
-                    wave = zoom(wave, z)
-                    flux = zoom(flux, (1, z))
-                    
-                # Make a dictionary of parameters
-                # This should really be a core.Spectrum() object!
-                spec_dict = dict(zip(self.data.colnames, self.data[row].as_void()))
-                spec_dict['wave'] = wave
-                spec_dict['flux'] = flux
-                spec_dict['mu'] = mu
-                spec_dict['r_eff'] = ''
-                #spec_dict['abund'] = abund
-                
-            # If not on the grid, interpolate to it
-            else:
-                # Call grid_interp method
-                if interp:
-                    spec_dict = self.grid_interp(Teff, logg, FeH)
-                else:
-                    return
-                    
-            return spec_dict
+            # Kick it to `get_unc()` method below
+            return self.get_unc(Teff, logg, FeH, resolution, interp, **kwargs)
             
         else:
-            print('Teff:', Teff, ' logg:', logg, ' FeH:', FeH, 
-                  ' model not in grid.')
-            return
+            
+            # See if the model with the desired parameters is witin the grid
+            in_grid = all([(Teff>=min(self.Teff_vals))&
+                           (Teff<=max(self.Teff_vals))&
+                           (logg>=min(self.logg_vals))&
+                           (logg<=max(self.logg_vals))&
+                           (FeH>=min(self.FeH_vals))&
+                           (FeH<=max(self.FeH_vals))])
+                       
+            if in_grid:
+            
+                # See if the model with the desired parameters is a true grid point
+                on_grid = self.data[[(self.data['Teff']==Teff)&
+                                     (self.data['logg']==logg)&
+                                     (self.data['FeH']==FeH)]]\
+                                     in self.data
+                                     
+                # Grab the data if the point is on the grid
+                if on_grid:
+                
+                    # Get the row index and filepath
+                    row, = np.where((self.data['Teff']==Teff)
+                                  & (self.data['logg']==logg)
+                                  & (self.data['FeH']==FeH))[0]
+                                  
+                    # Get the data
+                    filepath = self.path+str(self.data[row]['filename'])
+                    spec_dict = read_from_fits(filepath)
+                    
+                    # Convert from A to desired units
+                    spec_dict['wave'] *= self.const
+                    
+                    # Trim the wavelength and flux arrays
+                    idx, = np.where(np.logical_and(spec_dict['wave']>=self.wave_rng[0],
+                                                   spec_dict['wave']<=self.wave_rng[1]))
+                    spec_dict['flux'] = spec_dict['flux'][:,idx]
+                    spec_dict['wave'] = spec_dict['wave'][idx]
+                    spec_dict['r_eff'] = ''
+                    
+                    # Bin the spectrum if necessary
+                    if resolution or self.resolution:
+                        
+                        # Calculate zoom
+                        z = _calc_zoom(resolution or self.resolution, spec_dict['wave'])
+                        spec_dict['wave'] = zoom(spec_dict['wave'], z)
+                        spec_dict['flux'] = zoom(spec_dict['flux'], (1, z))
+                        
+                # If not on the grid, interpolate to it
+                else:
+                    # Call grid_interp method
+                    if interp:
+                        spec_dict = self.grid_interp(Teff, logg, FeH)
+                    else:
+                        return
+                    
+                return spec_dict
+            
+            else:
+                print('Teff:', Teff, ' logg:', logg, ' FeH:', FeH, 
+                      ' model not in grid.')
+                return
+            
+    def get_unc(self, Teff, logg, FeH, resolution='', interp=True, n_samples=2, plot=False):
+        """
+        Same as `get()` method above but includes bootstrapped uncertainties (MUCH slower)
+        """
+        # Separete the parameters
+        try:
+            teff, sig_teff = Teff
+        except TypeError:
+            teff, sig_teff = Teff, 0
+        try:
+            logg, sig_logg = logg
+        except TypeError:
+            logg, sig_logg = logg, 0
+        try:
+            feh, sig_feh = FeH
+        except TypeError:
+            feh, sig_feh = FeH, 0
+            
+        print(teff, sig_teff, logg, sig_logg, feh, sig_feh)
+            
+        # Get the target model
+        target = self.get(teff, logg, feh, resolution, interp)
+        
+        # Make sure there are uncertainties to calculate
+        if not all([p==0 for p in [sig_teff,sig_logg,sig_feh]]):
+            
+            # Time it
+            start = time.time()
+            
+            # Pull random interpolated models from the model grid
+            samples = []
+            for _ in range(n_samples):
+                
+                try:
+                    
+                    # Get random parameter values
+                    t = np.random.normal(teff, sig_teff)
+                    g = np.random.normal(logg, sig_logg)
+                    m = np.random.normal(feh, sig_feh)
+                    
+                    # Interpolate the model
+                    model = self.get(t, g, m)
+                    
+                    # Just take the mu=1 spectrum to save time
+                    flux = model['flux']
+                    
+                    # Add to the list of samples
+                    samples.append(flux)
+                    
+                except:
+                    pass
+                    
+            print('Run time in seconds: ', time.time()-start)
+            
+            # Calculate the confidence interval at each wavelength given the sampling
+            sigma = np.std(np.array(samples), axis=0)
+            
+            # Add the uncertainty to the model dict
+            target['error'] = sigma
+            
+            # Plot it
+            if plot:
+                plt.plot(target['wave'], target['flux'][-1])
+                plt.fill_between(target['wave'], target['flux'][-1]-sigma[-1], target['flux'][-1]+sigma[-1], alpha=0.1)
+            
+        else:
+            
+            pass
+            
+        return target
     
     def grid_interp(self, Teff, logg, FeH, plot=False):
         """
