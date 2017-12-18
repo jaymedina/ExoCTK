@@ -65,6 +65,21 @@ def interp_flux(mu, flux, params, values):
     
     return flx, generators
 
+# class StellarModel(object):
+#     """
+#     An object to hold all the data and metadata of a stellar model
+#     """
+#     def __init__(self, flux):
+#         """
+#         Initialize the object with no data
+#         """
+#         self.flux = ''
+#         self.mu = ''
+#         self.r_eff = ''
+#         self.wavelength = ''
+#
+#         self.resolution = ''
+
 class ModelGrid(object):
     """
     Creates a ModelGrid object which contains a multi-parameter
@@ -385,28 +400,20 @@ class ModelGrid(object):
             A dictionary of arrays of the wavelength, flux, and 
             mu values and the effective radius for the given model
         """
-        # Load the fluxes
-        if isinstance(self.flux,str):
-            self.load_flux()
-            
-        # Get the flux array
-        flux = self.flux.copy()
-        
-        # Get the interpolable parameters
-        params, values = [], []
-        for p,v in zip([self.Teff_vals, self.logg_vals, self.FeH_vals],
-                       [Teff, logg, FeH]):
-            if len(p)>1:
-                params.append(p)
-                values.append(v)
-        values = np.asarray(values)
+        # Find the neighboring grid points
+        full_rng = [self.Teff_vals, self.logg_vals, self.FeH_vals]
+        values = [Teff, logg, FeH]
+        params = find_closest(full_rng, values, n=1, values=True)
         label = '{}/{}/{}'.format(Teff,logg,FeH)
+        
+        # Load the data for the sliced model grid
+        flux, r_eff, mu, wavelength = self.get_data(params)
         
         try:
             # Interpolate flux values at each wavelength
             # using a pool for multiple processes
             print('Interpolating grid point [{}]...'.format(label))
-            processes = 4
+            processes = 8
             mu_index = range(flux.shape[-2])
             start = time.time()
             pool = multiprocessing.Pool(processes)
@@ -421,17 +428,17 @@ class ModelGrid(object):
             print('Run time in seconds: ', time.time()-start)
             
             # Interpolate mu value
-            interp_mu = RegularGridInterpolator(params, self.mu)
+            interp_mu = RegularGridInterpolator(params, mu)
             mu = interp_mu(np.array(values)).squeeze()
             
             # Interpolate r_eff value
-            interp_r = RegularGridInterpolator(params, self.r_eff)
+            interp_r = RegularGridInterpolator(params, r_eff)
             r_eff = interp_r(np.array(values)).squeeze()
             
             # Make a dictionary to return
             grid_point = {'Teff':Teff, 'logg':logg, 'FeH':FeH,
                           'mu': mu, 'r_eff': r_eff,
-                          'flux':new_flux, 'wave':self.wavelength,
+                          'flux':new_flux, 'wave':wavelength,
                           'generators':generators}
                           
             return grid_point
@@ -439,6 +446,63 @@ class ModelGrid(object):
         except IOError:
             print('Grid too sparse. Could not interpolate.')
             return
+            
+    def get_data(self, param_ranges):
+        """
+        Construct a 5D cube [Teff, logg, FeH, mu, flux] of flux values
+        with the list of [Teff, logg, FeH] model params
+        """
+        # Get array dimensions
+        T, G, M = param_ranges
+        shp = [len(T),len(G),len(M)]
+        n, N = 0, np.prod(shp)
+        
+        # No data yet
+        flux, r_eff, mu, wavelength = '', '', '', ''
+        
+        # Iterate through rows
+        print("Retrieving neighboring grid points...")
+        for nt,teff in enumerate(T):
+            for ng,logg in enumerate(G):
+                for nm,feh in enumerate(M):
+                    
+                    try:
+                        
+                        # Retrieve flux using the `get()` method
+                        d = self.get(teff, logg, feh, interp=False)
+                        
+                        if d:
+                            
+                            # Make sure arrays exist
+                            if isinstance(flux,str):
+                                flux = np.zeros(shp+list(d['flux'].shape))
+                            if isinstance(r_eff,str):
+                                r_eff = np.zeros(shp)
+                            if isinstance(mu,str):
+                                mu = np.zeros(shp+list(d['mu'].shape))
+                            
+                            # Add data to respective arrays
+                            flux[nt,ng,nm] = d['flux']
+                            r_eff[nt,ng,nm] = d['r_eff'] or np.nan
+                            mu[nt,ng,nm] = d['mu'].squeeze()
+                            
+                            # Get the wavelength array
+                            if isinstance(wavelength,str):
+                                wavelength = d['wave']
+                                
+                            # Garbage collection
+                            del d
+                            
+                            # Print update
+                            n += 1
+                            print("{:.2f} percent complete.".format(n*100./N), end='\r')
+                            
+                    except IOError:
+                        
+                        print('No model at [{} {} {}]. Aborting!'.format(teff,logg,feh))
+                        return
+                        
+        return flux, r_eff, mu, wavelength
             
     def load_flux(self, reset=False):
         """
@@ -466,57 +530,15 @@ class ModelGrid(object):
                 
             else:
                 
-                # Get array dimensions
-                T, G, M = self.Teff_vals, self.logg_vals, self.FeH_vals
-                shp = [len(T),len(G),len(M)]
-                n, N = 1, np.prod(shp)
+                # Get the data from the appropriate model grid points
+                params = [self.Teff_vals, self.logg_vals, self.FeH_vals]
+                self.flux, self.r_eff, self.mu, self.wavelength = self.get_data(params)
                 
-                # Iterate through rows
-                for nt,teff in enumerate(T):
-                    for ng,logg in enumerate(G):
-                        for nm,feh in enumerate(M):
-                            
-                            try:
-                                
-                                # Retrieve flux using the `get()` method
-                                d = self.get(teff, logg, feh, interp=False)
-                                
-                                if d:
-                                    
-                                    # Make sure arrays exist
-                                    if isinstance(self.flux,str):
-                                        self.flux = np.zeros(shp+list(d['flux'].shape))
-                                    if isinstance(self.r_eff,str):
-                                        self.r_eff = np.zeros(shp)
-                                    if isinstance(self.mu,str):
-                                        self.mu = np.zeros(shp+list(d['mu'].shape))
-                                        
-                                    # Add data to respective arrays
-                                    self.flux[nt,ng,nm] = d['flux']
-                                    self.r_eff[nt,ng,nm] = d['r_eff'] or np.nan
-                                    self.mu[nt,ng,nm] = d['mu'].squeeze()
-                                    
-                                    # Get the wavelength array
-                                    if isinstance(self.wavelength,str):
-                                        self.wavelength = d['wave']
-                                        
-                                    # Garbage collection
-                                    del d
-                                    
-                                    # Print update
-                                    n += 1
-                                    print("{:.2f} percent complete.".format(n*100./N), end='\r')
-                                    
-                            except IOError:
-                                # No model computed so reduce total
-                                N -= 1
-                                
                 # Load the flux into an HDF5 file
                 f = h5py.File(self.flux_file, "w")
                 dset = f.create_dataset('flux', data=self.flux)
                 f.close()
                 del dset
-                print("100.00 percent complete!", end='\n')
                 
         else:
             print('Data already loaded.')
@@ -591,7 +613,7 @@ class ModelGrid(object):
         self.FeH_vals = np.unique(self.data['FeH'])
         
         # Reload the flux array with the new grid parameters
-        self.load_flux(reset=True)
+        # self.load_flux(reset=True)
         
         # Clear the grid copy from memory
         del grid
