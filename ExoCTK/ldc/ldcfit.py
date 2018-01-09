@@ -3,6 +3,7 @@
 """
 A module to calculate limb darkening coefficients from a grid of model spectra
 """
+import os
 import numpy as np
 import inspect
 import datetime
@@ -152,14 +153,18 @@ def ldc(Teff, logg, FeH, model_grid, profiles, mu_min=0.05, ld_min=1E-6,
         radius calculated from the model of the given parameters from the
         input core.ModelGrid 
     
-    """              
+    """
+    # Get the grid point directly if the model_grid is just the path
+    if isinstance(model_grid, str) and os.path.exists(model_grid):
+        grid_point = core.ModelGrid(model_grid).get(Teff, logg, FeH)
+        
     # Get the model, interpolating if necessary
     if not grid_point:
         grid_point = model_grid.get(Teff, logg, FeH)
-    
+        
     # If the model exists, continue
     if grid_point:
-            
+        
         # Retrieve the wavelength, flux, mu, and effective radius
         wave = grid_point.get('wave')
         flux = grid_point.get('flux')
