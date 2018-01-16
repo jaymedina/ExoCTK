@@ -403,6 +403,10 @@ class Filter(object):
         f_cen = np.nanmean(self.rsr[:,1,:], axis=1)
         self.centers = np.asarray([w_cen,f_cen])
         
+        # Update the min and max wavelength
+        self.WavelengthMin = np.min(self.rsr[:,0])
+        self.WavelengthMax = np.max(self.rsr[:,0])
+        
         # Get the bin throughput function
         if not isinstance(bin_throughput, (list,tuple,np.ndarray)):
             bin_throughput = np.ones(self.pixels_per_bin)
