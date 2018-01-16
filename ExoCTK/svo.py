@@ -330,7 +330,7 @@ class Filter(object):
         return filtered.squeeze()
         
     def bin(self, n_bins=1, pixels_per_bin='', bin_throughput='',
-            wl_min='', wl_max=''):
+            wl_min='', wl_max='', verbose=True):
         """
         Break the filter up into bins and apply a throughput to each bin,
         useful for G141, G102, and other grisms
@@ -349,6 +349,8 @@ class Filter(object):
             The minimum wavelength to use
         wl_max: astropy.units.quantity (optional)
             The maximum wavelength to use
+        verbose: bool
+            Print some useful stuff
         """
         # Set n_bins and pixels_per_bin
         self.n_bins = 1
@@ -369,8 +371,8 @@ class Filter(object):
         
         # Trim the rsr by the given min and max
         self.rsr = r[:,np.logical_and(r[0]*unit>=wl_min,r[0]*unit<=wl_max)]
-        print('Bandpass trimmed to',
-              '{} - {}'.format(wl_min,wl_max))
+        if verbose:
+            print('Bandpass trimmed to {} - {}'.format(wl_min,wl_max))
               
         # Calculate the number of bins and channels
         rsr = len(self.rsr[0])
@@ -387,7 +389,8 @@ class Filter(object):
             print('Please specify n_bins or pixels_per_bin as integers.')
             return
             
-        print('{} bins of {} pixels each.'.format(self.n_bins,self.pixels_per_bin))
+        if verbose:
+            print('{} bins of {} pixels each.'.format(self.n_bins,self.pixels_per_bin))
         
         # Trim throughput edges so that there are an integer number of bins
         new_len = self.n_bins*self.pixels_per_bin
