@@ -106,7 +106,7 @@ def ld_profile(name='quadratic', latex=False):
         
 
 def ldc(Teff, logg, FeH, model_grid, profiles, mu_min=0.05, ld_min=1E-6, 
-        bandpass='', grid_point='', plot=False, save=False, **kwargs):
+        bandpass='', grid_point='', plot=False, save=False, verbose=True, **kwargs):
     """
     Calculates the limb darkening coefficients for a given synthetic spectrum.
     If the model grid does not contain a spectrum of the given parameters, the
@@ -175,12 +175,9 @@ def ldc(Teff, logg, FeH, model_grid, profiles, mu_min=0.05, ld_min=1E-6,
         if isinstance(bandpass, svo.Filter):
             
             # Make sure the bandpass has coverage
-            if bandpass.WavelengthMin*q.Unit(bandpass.WavelengthUnit)\
-                <model_grid.wave_rng[0]*model_grid.wl_units\
-            or bandpass.WavelengthMax*q.Unit(bandpass.WavelengthUnit)\
-                >model_grid.wave_rng[-1]*model_grid.wl_units:
-                print('Bandpass {} not covered by'.format(bandpass.filterID))
-                print('model grid of wavelength range',model_grid.wave_rng)
+            if bandpass.WavelengthMin*q.Unit(bandpass.WavelengthUnit)<model_grid.wave_rng[0]*model_grid.wl_units\
+            or bandpass.WavelengthMax*q.Unit(bandpass.WavelengthUnit)>model_grid.wave_rng[-1]*model_grid.wl_units:
+                print('Bandpass {} not covered by model grid of wavelength range {}.'.format(bandpass.filterID,model_grid.wave_rng))
                 
                 return
             
@@ -281,10 +278,12 @@ def ldc(Teff, logg, FeH, model_grid, profiles, mu_min=0.05, ld_min=1E-6,
         # Make a table for each profile then stack them so that
         # the columns are ['Profile','c0','e0',...,'cn','en']
         for p in grid_point['profiles']:
-            print(p,':')
-            grid_point[p]['coeffs'].pprint(max_width=-1)
-            print('\r')
             
+            if verbose:
+                print(p,':')
+                grid_point[p]['coeffs'].pprint(max_width=-1)
+                print('\r')
+                
             # Write the table to file
             if save:
                 with open(save, 'a') as f:
