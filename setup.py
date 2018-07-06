@@ -5,17 +5,33 @@ import glob
 import os
 import sys
 
+from configparser import ConfigParser
+
+# Get some values from the setup.cfg
+conf = ConfigParser()
+conf.read(['setup.cfg'])
+metadata = dict(conf.items('metadata'))
+
+PACKAGENAME = metadata.get('package_name', 'core')
+DESCRIPTION = metadata.get('description', 'The Exoplanet Characterization Toolkit')
+AUTHOR = metadata.get('author', 'ExoCTK @ STScI')
+AUTHOR_EMAIL = metadata.get('author_email', '')
+LICENSE = metadata.get('license', 'unknown')
+URL = metadata.get('url', 'http://exoctk.stsci.edu')
+__minimum_python_version__ = metadata.get("minimum_python_version", "3.5")
+
+# Enforce Python version check - this is the same check as in __init__.py but
+# this one has to happen before importing ah_bootstrap.
+if sys.version_info < tuple((int(val) for val in __minimum_python_version__.split('.'))):
+    sys.stderr.write("ERROR: core requires Python {} or later\n".format(__minimum_python_version__))
+    sys.exit(1)
+
+# Import ah_bootstrap after the python version validation
+
 import ah_bootstrap
 from setuptools import setup
 
-# os.system('pip install pysynphot')
-# os.system('pip install bibtexparser')
-
-#A dirty hack to get around some early import/configurations ambiguities
-if sys.version_info[0] >= 3:
-    import builtins
-else:
-    import __builtin__ as builtins
+import builtins
 builtins._ASTROPY_SETUP_ = True
 
 from astropy_helpers.setup_helpers import (register_commands, get_debug_option,
@@ -23,35 +39,37 @@ from astropy_helpers.setup_helpers import (register_commands, get_debug_option,
 from astropy_helpers.git_helpers import get_git_devstr
 from astropy_helpers.version_helpers import generate_version_py
 
-# Get some values from the setup.cfg
-try:
-    from ConfigParser import ConfigParser
-except ImportError:
-    from configparser import ConfigParser
 
-conf = ConfigParser()
-conf.read(['setup.cfg'])
-metadata = dict(conf.items('metadata'))
+# order of priority for long_description:
+#   (1) set in setup.cfg,
+#   (2) load LONG_DESCRIPTION.rst,
+#   (3) load README.rst,
+#   (4) package docstring
+readme_glob = 'README*'
+_cfg_long_description = metadata.get('long_description', '')
+if _cfg_long_description:
+    LONG_DESCRIPTION = _cfg_long_description
 
-PACKAGENAME = metadata.get('package_name', 'packagename')
-DESCRIPTION = metadata.get('description')
-AUTHOR = metadata.get('author', '')
-AUTHOR_EMAIL = metadata.get('author_email', '')
-LICENSE = metadata.get('license', 'unknown')
-URL = metadata.get('url', 'http://astropy.org')
-EXTERNAL_FILES = metadata.get('external_files')
+elif os.path.exists('LONG_DESCRIPTION.rst'):
+    with open('LONG_DESCRIPTION.rst') as f:
+        LONG_DESCRIPTION = f.read()
 
-# Get the long description from the package's docstring
-__import__(PACKAGENAME)
-package = sys.modules[PACKAGENAME]
-LONG_DESCRIPTION = package.__doc__
+elif len(glob.glob(readme_glob)) > 0:
+    with open(glob.glob(readme_glob)[0]) as f:
+        LONG_DESCRIPTION = f.read()
+
+else:
+    # Get the long description from the package's docstring
+    __import__(PACKAGENAME)
+    package = sys.modules[PACKAGENAME]
+    LONG_DESCRIPTION = package.__doc__
 
 # Store the package name in a built-in variable so it's easy
 # to get from other parts of the setup infrastructure
 builtins._ASTROPY_PACKAGE_NAME_ = PACKAGENAME
 
 # VERSION should be PEP440 compatible (http://www.python.org/dev/peps/pep-0440)
-VERSION = metadata.get('version', '0.0.dev')
+VERSION = metadata.get('version', '0.0.dev0')
 
 # Indicates if this version is a release version
 RELEASE = 'dev' not in VERSION
@@ -68,9 +86,9 @@ cmdclassd = register_commands(PACKAGENAME, VERSION, RELEASE)
 generate_version_py(PACKAGENAME, VERSION, RELEASE,
                     get_debug_option(PACKAGENAME))
 
-# Treat everything in scripts except README.rst as a script to be installed
+# Treat everything in scripts except README* as a script to be installed
 scripts = [fname for fname in glob.glob(os.path.join('scripts', '*'))
-           if os.path.basename(fname) != 'README.rst']
+           if not os.path.basename(fname).startswith('README')]
 
 
 # Get configuration information from all of the various subpackages.
@@ -80,15 +98,16 @@ package_info = get_package_info()
 
 # Add the project-global data
 package_info['package_data'].setdefault(PACKAGENAME, [])
-# package_info['package_data'][PACKAGENAME].append('data/*')
+package_info['package_data'][PACKAGENAME].append('data/*')
 
 # Define entry points for command-line scripts
 entry_points = {'console_scripts': []}
 
-entry_point_list = conf.items('entry_points')
-for entry_point in entry_point_list:
-    entry_points['console_scripts'].append('{0} = {1}'.format(entry_point[0],
-                                                              entry_point[1]))
+if conf.has_section('entry_points'):
+    entry_point_list = conf.items('entry_points')
+    for entry_point in entry_point_list:
+        entry_points['console_scripts'].append('{0} = {1}'.format(
+            entry_point[0], entry_point[1]))
 
 # Include all .c files, recursively, including those generated by
 # Cython, since we can not do this in MANIFEST.in with a "dynamic"
@@ -102,16 +121,6 @@ for root, dirs, files in os.walk(PACKAGENAME):
                     os.path.relpath(root, PACKAGENAME), filename))
 package_info['package_data'][PACKAGENAME].extend(c_files)
 
-# Add external files
-ext_files = []
-for root, dirs, files in os.walk(EXTERNAL_FILES):
-    for filename in files:
-        if filename.endswith('.dat') or filename.endswith('.in') or filename.endswith('.pic'):
-            ext_files.append(
-                os.path.join(
-                    os.path.relpath(root, EXTERNAL_FILES), filename))
-package_info['package_data'][PACKAGENAME].extend(ext_files)
-
 # Note that requires and provides should not be included in the call to
 # ``setup``, since these are now deprecated. See this link for more details:
 # https://groups.google.com/forum/#!topic/astropy-dev/urYO8ckB2uM
@@ -120,7 +129,7 @@ setup(name=PACKAGENAME,
       version=VERSION,
       description=DESCRIPTION,
       scripts=scripts,
-      install_requires=metadata.get('install_requires', 'astropy').strip().split(),
+      install_requires=[s.strip() for s in metadata.get('install_requires', 'astropy').split(',')],
       author=AUTHOR,
       author_email=AUTHOR_EMAIL,
       license=LICENSE,
@@ -130,8 +139,6 @@ setup(name=PACKAGENAME,
       zip_safe=False,
       use_2to3=False,
       entry_points=entry_points,
+      python_requires='>={}'.format(__minimum_python_version__),
       **package_info
 )
-
-#os.system('python ExoCTK/bar/setup.py build_ext')
-#os.system('./ExoCTK/bar/include/compile_cea_64bit.com')
