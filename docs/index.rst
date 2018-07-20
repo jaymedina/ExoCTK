@@ -13,7 +13,7 @@ ExoCTK Package Documentation
 ############################
 
 Welcome to the ExoCTK documentation! The Exoplanet Characterization Toolkit (ExoCTK) is an open-source, modular data
-analysis package focused primarily on atmospheric characterization of exoplanets.
+analysis package focused primarily on atmospheric characterization of exoplanets. This documentation is a work in progress so please feel free to contact our team if you have any questions or suggestions for additions to our documentation. 
 
 ******************
 User Documentation
