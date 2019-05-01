@@ -333,6 +333,173 @@ def contam(cube, targetName='noName', paRange=[0, 360], badPA=[], tmpDir="",
 
     return fig
 
+def contam2(cube, targetName='noName', paRange=[0, 360], badPA=[], tmpDir="",
+           fig='', to_html=True):
+    """
+    Generate the contamination plot.
+
+    Parameters
+    ----------
+    cube: array-like, str
+        The data cube or FITS filename containing the data.
+    targetName: str
+        The name of the target.
+    paRange: sequence
+        The position angle range to consider.
+    badPA: sequence
+        Position angles to exclude.
+    tmpDir: str
+        A directory to write the files to.
+    fig: matplotlib.figure, bokeh.figure
+        A figure to add the plots to.
+    to_html: bool
+        Return the image as bytes for HTML.
+
+    Returns
+    -------
+    fig : matplotlib.pyplot or bokeh object
+        The populated matplotlib or bokeh plot.
+    """
+    # Get data from FITS file
+    if isinstance(cube, str):
+        # hdu = fits.open('cube_'+target+'.fits')
+        hdu = fits.open(cubeName)
+        cube = hdu[0].data
+        hdu.close()
+
+    trace2dO1 = cube[0, :, :]  # order 1
+    trace2dO2 = cube[1, :, :]  # order 2
+    cube = cube[2:, :, :]  # all the angles
+
+    plotPAmin, plotPAmax = paRange
+
+    # start calculations
+    loc = 'data/contam_visibility/lambda_order1-2.txt'
+    lam_file = pkg_resources.resource_filename('exoctk', loc)
+    ypix, lamO1, lamO2 = np.loadtxt(lam_file, unpack=True)
+
+    ny = trace2dO1.shape[0]
+    nPA = cube.shape[0]
+    dPA = 360//nPA
+    PA = np.arange(nPA)*dPA
+
+    contamO1 = np.zeros([ny, nPA])
+    contamO2 = np.zeros([ny, nPA])
+    for y in np.arange(ny):
+        i = np.argmax(trace2dO1[y, :])
+        tr = trace2dO1[y, i-20:i+41]
+        w = tr/np.sum(tr**2)
+        ww = np.tile(w, nPA).reshape([nPA, tr.size])
+        contamO1[y, :] = np.sum(cube[:, y, i-20:i+41]*ww, axis=1)
+
+        if lamO2[y] < 0.6:
+            continue
+        i = np.argmax(trace2dO2[y, :])
+        tr = trace2dO2[y, i-20:i+41]
+        w = tr/np.sum(tr**2)
+        ww = np.tile(w, nPA).reshape([nPA, tr.size])
+        contamO2[y, :] = np.sum(cube[:, y, i-20:i+41]*ww, axis=1)
+
+    # Otherwise, it's a Bokeh plot
+    if fig:
+
+        TOOLS = 'pan, box_zoom, crosshair, reset, hover, save'
+
+        y = np.array([0., 0.])
+        y1 = 0.07
+        y2 = 0.12
+        y3 = 0.17
+        y4 = 0.23
+        bad_PA_color = '#dddddd'
+        bad_PA_alpha = 0.7
+
+        # Order 1
+
+        # Contam plot
+        xlim0 = lamO1.min()
+        xlim1 = lamO1.max()
+        ylim0 = PA.min()-0.5*dPA
+        ylim1 = PA.max()+0.5*dPA
+        color_mapper = LinearColorMapper(palette=inferno(8)[::-1],
+                                         low=-4, high=1)
+        color_mapper.low_color = 'white'
+        color_mapper.high_color = 'black'
+        s2 = figure(tools=TOOLS, width=500, height=500, title=None,
+                    x_range=Range1d(xlim0, xlim1),
+                    y_range=Range1d(ylim0, ylim1))
+        fig_data = np.log10(np.clip(contamO1.T, 1.e-10, 1.))
+        s2.image([fig_data], x=xlim0, y=ylim0, dw=xlim1-xlim0, dh=ylim1-ylim0,
+                 color_mapper=color_mapper)
+        s2.xaxis.axis_label = 'Wavelength (um)'
+        s2.yaxis.axis_label = 'Position Angle (degrees)'
+
+        # Line plot
+        s3 = figure(tools=TOOLS, width=150, height=500,
+                    x_range=Range1d(0, 100), y_range=s2.y_range, title=None)
+        s3.line(100*np.sum(contamO1 >= 0.001, axis=0)/ny, PA-dPA/2,
+                line_color='blue', legend='> 0.001')
+        s3.line(100*np.sum(contamO1 >= 0.01, axis=0)/ny, PA-dPA/2,
+                line_color='green', legend='> 0.01')
+        s3.xaxis.axis_label = '% channels contam.'
+        s3.yaxis.major_label_text_font_size = '0pt'
+
+        # Add bad PAs
+        for ybad0, ybad1 in badPA:
+            s2.patch([xlim0, xlim1, xlim1, xlim0],
+                     [ybad1, ybad1, ybad0, ybad0],
+                     color=bad_PA_color, alpha=bad_PA_alpha)
+            s3.patch([0, 100, 100, 0], [ybad1, ybad1, ybad0, ybad0],
+                     color=bad_PA_color, alpha=bad_PA_alpha, legend='Bad PA')
+
+
+        s1.xaxis.major_label_text_font_size = '0pt'
+        s1.yaxis.major_label_text_font_size = '0pt'
+
+        # Order 2
+
+        # Contam plot
+        xlim0 = lamO2.min()
+        xlim1 = lamO2.max()
+        ylim0 = PA.min()-0.5*dPA
+        ylim1 = PA.max()+0.5*dPA
+        xlim0 = 0.614
+        s5 = figure(tools=TOOLS, width=250, height=500, title=None,
+                    x_range=Range1d(xlim0, xlim1), y_range=s2.y_range)
+        fig_data = np.log10(np.clip(contamO2.T, 1.e-10, 1.))[:, 300:]
+        s5.image([fig_data], x=xlim0, y=ylim0, dw=xlim1-xlim0, dh=ylim1-ylim0,
+                 color_mapper=color_mapper)
+        s5.yaxis.major_label_text_font_size = '0pt'
+        s5.xaxis.axis_label = 'Wavelength (um)'
+
+        # Line plot
+        s6 = figure(tools=TOOLS, width=150, height=500, y_range=s2.y_range,
+                    x_range=Range1d(100, 0), title=None)
+        s6.line(100*np.sum(contamO2 >= 0.001, axis=0)/ny, PA-dPA/2,
+                line_color='blue', legend='> 0.001')
+        s6.line(100*np.sum(contamO2 >= 0.01, axis=0)/ny, PA-dPA/2,
+                line_color='green', legend='> 0.01')
+        s6.xaxis.axis_label = '% channels contam.'
+        s6.yaxis.major_label_text_font_size = '0pt'
+
+        # Dummy plots for nice spacing
+        s0 = figure(tools=TOOLS, width=150, plot_height=100, title=None)
+        s0.outline_line_color = "white"
+        s7 = figure(tools=TOOLS, width=150, plot_height=100, title=targetName)
+        s7.outline_line_color = "white"
+
+        # Add bad PAs
+        for ybad0, ybad1 in badPA:
+            s5.patch([xlim0, xlim1, xlim1, xlim0],
+                     [ybad1, ybad1, ybad0, ybad0],
+                     color=bad_PA_color, alpha=bad_PA_alpha)
+            s6.patch([0, 100, 100, 0], [ybad1, ybad1, ybad0, ybad0],
+                     color=bad_PA_color, alpha=bad_PA_alpha, legend='Bad PA')
+
+        # put all the plots in a grid layout
+        fig = gridplot(children=[[s7, s4, s1, s0], [s6, s5, s2, s3]])
+
+    return fig
+
 
 if __name__ == "__main__":
     # arguments RA & DEC, conversion to radians

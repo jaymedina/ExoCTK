@@ -258,7 +258,21 @@ def fieldSim(ra, dec, instrument, binComp=''):
         xval, yval =
         add_to_apa =
     elif instrument=='NIRCam':
-        dimX =
+        dimX = 256
+        dimY =
+        rad =
+        pixel_scale =
+        xval, yval =
+        add_to_apa =
+    elif instrument=='NIRSpec':
+        dimX = 256
+        dimY =
+        rad =
+        pixel_scale =
+        xval, yval =
+        add_to_apa =
+    elif instrument=='MIRI':
+        dimX = 256
         dimY =
         rad =
         pixel_scale =
@@ -399,8 +413,8 @@ def fieldSim(ra, dec, instrument, binComp=''):
             # if target and first kPA, add target traces of order 1 and 2
             # in output cube
             if (intx == 0) & (inty == 0) & (kPA == 0):
-                fNameModO12 = saveFiles[k]
-                modelO12 = readsav(fNameModO12, verbose=False)['modelo12']
+                fNameModO12 = fitsFiles[k]
+                modelO12 = fits.getdata(fNameModO12)
                 ord1 = modelO12[0, my0:my1, mx0:mx1]*fluxscale
                 ord2 = modelO12[1, my0:my1, mx0:mx1]*fluxscale
                 simuCube[0, y0:y0+my1-my0, x0:x0+mx1-mx0] = ord1
