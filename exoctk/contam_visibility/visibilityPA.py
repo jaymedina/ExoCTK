@@ -359,4 +359,22 @@ def using_gtvt(ra, dec, instrument, ephFileName=None, output='bokeh'):
     table = Table([v3minnan, v3maxnan, paMinnan, paMaxnan, paNomnan, gdnan, mjdnan],\
                   names=('#min_V3_PA', 'max_V3_PA','min_Aperture_PA',\
                          'max_Aperture_PA', 'nom_Aperture_PA', 'Gregorian', 'MJD'))
+
+    # And lastly, getting bad PAs for the contamination plot
+    allPAs = np.arange(0,361,1)
+    badPA = []
+    minrange = np.sort(paMinnan)
+    maxrange = np.sort(paMaxnan)
+    for a, b, c in zip(allPAs, minrange, maxrange):
+        if (a<minrange) & (a>maxrange)
+
+    """
+    for PA in allPAs:
+        if (PA < min(paMinnan)):
+            print(PA)
+        elif (PA > max(paMaxnan)):
+            print(PA)
+    """
+
+
     return paMin, paMax, gd, fig, table
